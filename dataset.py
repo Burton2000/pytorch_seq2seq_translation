@@ -2,9 +2,11 @@ import unicodedata
 import re
 import random
 import torch
+from torch.utils.data import Dataset
 
-SOS_token = 0
-EOS_token = 1
+PAD = 0
+SOS_token = 1
+EOS_token = 2
 
 MAX_LENGTH = 10
 
@@ -18,14 +20,43 @@ eng_prefixes = (
 )
 
 
+
+class Seq2SeqDataset(Dataset):
+
+    def __init__(self, pairs, input_lang, output_lang):
+        self.input_lang = input_lang
+        self.output_lang = output_lang
+        self.input_seq = torch.zeros((len(pairs)), MAX_LENGTH, dtype=torch.int64)
+        self.label_seq = torch.zeros((len(pairs)), MAX_LENGTH, dtype=torch.int64)
+        self.lengths_input = []
+        self.lengths_output = []
+
+        for i, pair in enumerate(pairs):
+            lang1_sample, lang2_sample = tensors_from_pair(pair, input_lang, output_lang)
+
+            self.lengths_input.append(len(lang1_sample))
+            self.lengths_output.append(len(lang2_sample))
+
+            self.input_seq[i, :len(lang1_sample)] = lang1_sample.squeeze_()
+            self.label_seq[i, :len(lang2_sample)] = lang2_sample.squeeze_()
+
+        print('hi')
+
+    def __len__(self):
+        return len(self.input_seq)
+
+    def __getitem__(self, idx):
+        return self.input_seq[idx], self.label_seq[idx]
+
+
 class Lang:
     """ Helper class to create and store dictionary of our vocabulary."""
     def __init__(self, name):
         self.name = name
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {0: "SOS", 1: "EOS"}
-        self.n_words = 2  # Count SOS and EOS.
+        self.index2word = {0: "PAD", 1: "SOS", 2: "EOS"}
+        self.n_words = 3  # Count PAD, SOS and EOS.
 
     def add_sentence(self, sentence):
         for word in sentence.split(' '):

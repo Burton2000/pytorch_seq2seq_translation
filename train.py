@@ -1,10 +1,11 @@
 import torch
 from torch import optim
 from torch import nn
+from torch.utils.data import DataLoader
 import random
 import time
 
-from dataset import SOS_token, EOS_token
+from dataset import SOS_token, EOS_token, Seq2SeqDataset
 from dataset import tensors_from_pair, prepare_data
 from utils import time_since, show_plot
 from model import AttnDecoderRNN, EncoderRNN
@@ -65,7 +66,7 @@ def train_iteration(input_tensor, target_tensor, encoder, decoder, encoder_optim
     return loss.item() / target_length
 
 
-def train(encoder, decoder, n_iters, pairs, input_lang, output_lang, print_every=1000, plot_every=1000, learning_rate=0.01):
+def train(encoder, decoder, n_iters, dataloader, input_lang, output_lang, print_every=1000, plot_every=1000, learning_rate=0.01):
     start = time.time()
     plot_losses = []
     print_loss_total = 0  # Reset every print_every
@@ -74,19 +75,12 @@ def train(encoder, decoder, n_iters, pairs, input_lang, output_lang, print_every
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
 
-    # Randomly sample pairs from training set.
-    training_pairs = []
-    for i in range(n_iters):
-        lang1_sample, lang2_sample = tensors_from_pair(random.choice(pairs), input_lang, output_lang)
-        lang1_sample.to(device), lang2_sample.to(device)
-        training_pairs.append((lang1_sample, lang2_sample))
-
     loss_func = nn.NLLLoss()
+    iter_ = 1
+    for input_tensor, target_tensor in enumerate(dataloader):
 
-    for iter_ in range(1, n_iters + 1):
-        training_pair = training_pairs[iter_ - 1]  # Get a training pair.
-        input_tensor = training_pair[0]
-        target_tensor = training_pair[1]
+        input_tensor = input_tensor.to(device)
+        target_tensor = target_tensor.to(device)
 
         loss = train_iteration(input_tensor, target_tensor, encoder,
                                decoder, encoder_optimizer, decoder_optimizer, loss_func)
@@ -110,12 +104,15 @@ def train(encoder, decoder, n_iters, pairs, input_lang, output_lang, print_every
 def main():
     input_lang, output_lang, pairs = prepare_data('eng', 'fra', reverse=False)
 
+    seqdataset = Seq2SeqDataset(pairs, input_lang, output_lang)
+    seqdataloader = DataLoader(seqdataset, batch_size=2)
+
     encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
     attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1, max_length=10).to(device)
 
     loss_history = []
     for i in range(5):
-        losses = train(encoder, attn_decoder, len(pairs), pairs=pairs, input_lang=input_lang, output_lang=output_lang, print_every=1000)
+        losses = train(encoder, attn_decoder, len(pairs), seqdataloader, input_lang=input_lang, output_lang=output_lang, print_every=1000)
 
         loss_history.extend(losses)
         evaluate_randomly(encoder, attn_decoder, pairs, max_length=10, input_lang=input_lang, output_lang=output_lang)
