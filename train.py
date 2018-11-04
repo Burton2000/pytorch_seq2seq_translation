@@ -4,60 +4,56 @@ from torch import nn
 import random
 import time
 
-from dataset import tensorsFromPair, prepareData
-from utils import timeSince, showPlot
+from dataset import SOS_token, EOS_token
+from dataset import tensors_from_pair, prepare_data
+from utils import time_since, show_plot
 from model import AttnDecoderRNN, EncoderRNN
-from evaluate import evaluateRandomly
+from evaluate import evaluate_randomly
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-SOS_token = 0
-EOS_token = 1
-
+hidden_size = 256
 teacher_forcing_ratio = 0.5
 
 
-def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion):
-    encoder_hidden = encoder.initHidden()
-
-    encoder_optimizer.zero_grad()
-    decoder_optimizer.zero_grad()
-
+def train_iteration(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, loss_func):
     input_length = input_tensor.size(0)
     target_length = target_tensor.size(0)
-
+    
+    encoder_hidden = encoder.init_hidden().to(device)
     encoder_outputs = torch.zeros(decoder.max_length, encoder.hidden_size, device=device)
-
+    
+    # Zero the model gradients.
+    encoder_optimizer.zero_grad()
+    decoder_optimizer.zero_grad()
     loss = 0
-
+    
+    # Encoder.
     for ei in range(input_length):
-        encoder_output, encoder_hidden = encoder(
-            input_tensor[ei], encoder_hidden)
+        encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
         encoder_outputs[ei] = encoder_output[0, 0]
 
     decoder_input = torch.tensor([[SOS_token]], device=device)
-
     decoder_hidden = encoder_hidden
 
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
+    # Decoder.
     if use_teacher_forcing:
         # Teacher forcing: Feed the target as the next input
         for di in range(target_length):
-            decoder_output, decoder_hidden, decoder_attention = decoder(
-                decoder_input, decoder_hidden, encoder_outputs)
-            loss += criterion(decoder_output, target_tensor[di])
-            decoder_input = target_tensor[di]  # Teacher forcing
+            decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_outputs)
 
+            loss += loss_func(decoder_output, target_tensor[di])
+            decoder_input = target_tensor[di]  # Teacher forcing
     else:
         # Without teacher forcing: use its own predictions as the next input
         for di in range(target_length):
-            decoder_output, decoder_hidden, decoder_attention = decoder(
-                decoder_input, decoder_hidden, encoder_outputs)
-            topv, topi = decoder_output.topk(1)
-            decoder_input = topi.squeeze().detach()  # detach from history as input
+            decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_outputs)
 
-            loss += criterion(decoder_output, target_tensor[di])
+            _, top_index = decoder_output.topk(1)
+            decoder_input = top_index.squeeze().detach()  # detach from history as input
+
+            loss += loss_func(decoder_output, target_tensor[di])
             if decoder_input.item() == EOS_token:
                 break
 
@@ -69,7 +65,7 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
     return loss.item() / target_length
 
 
-def trainIters(encoder, decoder, n_iters, pairs, input_lang, output_lang, print_every=1000, plot_every=100, learning_rate=0.01):
+def train(encoder, decoder, n_iters, pairs, input_lang, output_lang, print_every=1000, plot_every=1000, learning_rate=0.01):
     start = time.time()
     plot_losses = []
     print_loss_total = 0  # Reset every print_every
@@ -77,47 +73,54 @@ def trainIters(encoder, decoder, n_iters, pairs, input_lang, output_lang, print_
 
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    training_pairs = [tensorsFromPair(random.choice(pairs), input_lang, output_lang)
-                      for i in range(n_iters)]
-    criterion = nn.NLLLoss()
 
-    for iter in range(1, n_iters + 1):
-        training_pair = training_pairs[iter - 1]
+    # Randomly sample pairs from training set.
+    training_pairs = []
+    for i in range(n_iters):
+        lang1_sample, lang2_sample = tensors_from_pair(random.choice(pairs), input_lang, output_lang)
+        lang1_sample.to(device), lang2_sample.to(device)
+        training_pairs.append((lang1_sample, lang2_sample))
+
+    loss_func = nn.NLLLoss()
+
+    for iter_ in range(1, n_iters + 1):
+        training_pair = training_pairs[iter_ - 1]  # Get a training pair.
         input_tensor = training_pair[0]
         target_tensor = training_pair[1]
 
-        loss = train(input_tensor, target_tensor, encoder,
-                     decoder, encoder_optimizer, decoder_optimizer, criterion)
+        loss = train_iteration(input_tensor, target_tensor, encoder,
+                               decoder, encoder_optimizer, decoder_optimizer, loss_func)
         print_loss_total += loss
         plot_loss_total += loss
 
-        if iter % print_every == 0:
+        if iter_ % print_every == 0:
             print_loss_avg = print_loss_total / print_every
             print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, iter / n_iters),
-                                         iter, iter / n_iters * 100, print_loss_avg))
+            print('%s (%d %d%%) %.4f' % (time_since(start, iter_ / n_iters),
+                                         iter_, iter_ / n_iters * 100, print_loss_avg))
 
-        if iter % plot_every == 0:
+        if iter_ % plot_every == 0:
             plot_loss_avg = plot_loss_total / plot_every
             plot_losses.append(plot_loss_avg)
             plot_loss_total = 0
 
-    showPlot(plot_losses)
+    return plot_losses
 
 
 def main():
-    input_lang, output_lang, pairs = prepareData('eng', 'fra', reverse=False)
+    input_lang, output_lang, pairs = prepare_data('eng', 'fra', reverse=False)
 
-    hidden_size = 256
+    encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
+    attn_decoder = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1, max_length=10).to(device)
 
-    encoder1 = EncoderRNN(input_lang.n_words, hidden_size).to(device)
-    attn_decoder1 = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1, max_length=10).to(device)
+    loss_history = []
+    for i in range(5):
+        losses = train(encoder, attn_decoder, len(pairs), pairs=pairs, input_lang=input_lang, output_lang=output_lang, print_every=1000)
 
-    for i in range(100):
-        trainIters(encoder1, attn_decoder1, 1000, pairs=pairs, input_lang=input_lang, output_lang=output_lang, print_every=10)
+        loss_history.extend(losses)
+        evaluate_randomly(encoder, attn_decoder, pairs, max_length=10, input_lang=input_lang, output_lang=output_lang)
 
-        evaluateRandomly(encoder1, attn_decoder1, pairs, max_length=10, input_lang=input_lang, output_lang=output_lang)
-
+    show_plot(loss_history)
     print('done training')
 
 
