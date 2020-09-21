@@ -2,7 +2,7 @@
 
 In this repo I am trying out sequence to sequence modelling using encoder/decoder rnns with attention in PyTorch. The task is sentence translation between 2 languages (currently English and French).
   
-I have adapated this from the tutorial provided on the PyTorch website (check refernce)
+I have adapated this from the tutorial provided on the PyTorch website (check reference)
 
 ### Example outputs
 This is some outputs from the trained model. For these following examples the first line is the English input sentence, the second is the French ground truth and the third line is the output from the trained model.  
